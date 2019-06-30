@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="58dp"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/iv_thumb"
+        android:layout_width="58dp"
+        android:layout_height="58dp"
+        android:src="@mipmap/ic_thumb_bg"
+        android:scaleType="centerCrop" />
+</FrameLayout>
