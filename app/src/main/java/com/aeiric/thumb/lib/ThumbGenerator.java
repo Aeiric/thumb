@@ -7,6 +7,8 @@ import android.media.MediaMetadataRetriever;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
+import android.util.Log;
+import android.util.SparseBooleanArray;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
@@ -20,14 +22,12 @@ import static com.aeiric.thumb.lib.ThumbBitmapUtil.getTrackShowBitmap;
 import static com.aeiric.thumb.lib.ThumbBitmapUtil.saveBitmapToFile;
 import static com.aeiric.thumb.lib.ThumbCalculate.getTargetHeight;
 import static com.aeiric.thumb.lib.ThumbCalculate.getTargetWidth;
-import static com.aeiric.thumb.lib.ThumbConstant.PREFIX_THUMB;
-import static com.aeiric.thumb.lib.ThumbConstant.PREFIX_TRACK;
 import static com.aeiric.thumb.lib.ThumbFileUtil.getCacheThumbFile;
 import static com.aeiric.thumb.lib.ThumbFileUtil.getCacheTrackFile;
-import static com.aeiric.thumb.lib.ThumbFileUtil.getThumbFilePath;
-import static com.aeiric.thumb.lib.ThumbFileUtil.getTrackFilePath;
 import static com.aeiric.thumb.lib.ThumbFileUtil.makeThumbFile;
 import static com.aeiric.thumb.lib.ThumbFileUtil.makeTrackFile;
+import static com.aeiric.thumb.lib.ThumbUtil.getThumbTag;
+import static com.aeiric.thumb.lib.ThumbUtil.getTrackTag;
 
 
 /**
@@ -53,6 +53,10 @@ class ThumbGenerator {
     private Bitmap mThumbBitmap;
     private int mSecPerThumb;
     private float mPercent;
+    @NonNull
+    private volatile SparseBooleanArray mExcuteList;
+    private boolean mPause;
+
 
     ThumbGenerator(@NonNull ThumbGeneratorBuilder builder) {
         mRetriever = builder.retriever;
@@ -63,6 +67,8 @@ class ThumbGenerator {
         mTrackDirSuffix = builder.trackDirSuffix;
         mSecPerThumb = builder.secPerThumb;
         mPercent = builder.percent;
+        mExcuteList = new SparseBooleanArray(10);
+
     }
 
     void genThumb(@NonNull final ImageView iv, final int pos) {
@@ -72,7 +78,7 @@ class ThumbGenerator {
         if (mThumbDirSuffix == null) {
             return;
         }
-        final String tag = PREFIX_THUMB + getThumbFilePath(mContext, mThumbDirSuffix, mSecPerThumb * pos) + pos;
+        final String tag = getThumbTag(mContext, mThumbDirSuffix, pos * mSecPerThumb);
         if (iv.getTag() != null) {
             String lastTag = (String) iv.getTag();
             if (tag.equals(lastTag)) {
@@ -110,7 +116,7 @@ class ThumbGenerator {
                     }
                     return null;
                 }
-            }, tag);
+            });
         } else {
             showThumb(iv, thumbFile, tag);
         }
@@ -124,7 +130,7 @@ class ThumbGenerator {
             return;
         }
         iv.setImageResource(R.mipmap.ic_thumb_bg);
-        final String tag = PREFIX_TRACK + getTrackFilePath(mContext, mTrackDirSuffix, pos * mSecPerThumb);
+        final String tag = getTrackTag(mContext, mTrackDirSuffix, pos * mSecPerThumb);
         iv.setTag(tag);
         Bitmap bitmap = mThumbCache.getBitmap(tag);
         if (bitmap != null && !bitmap.isRecycled()) {
@@ -137,12 +143,17 @@ class ThumbGenerator {
                 mThumbExecutor.addCallable(new Callable() {
                     @Override
                     public Object call() {
+                        if (mPause) {
+                            mExcuteList.put(pos, false);
+                            return null;
+                        }
                         if (mContext == null) {
                             return null;
                         }
                         if (mTrackDirSuffix == null) {
                             return null;
                         }
+                        Log.e("generator", "----pos----" + pos + "----executed----");
                         Bitmap thumbBitmap = mRetriever.getFrameAtTime((long) (mSecPerThumb * pos * 1000000));
                         if (thumbBitmap == null) {
                             return null;
@@ -165,12 +176,33 @@ class ThumbGenerator {
                                     showTrack(iv, imgFile, tag);
                                 }
                             });
+                            mExcuteList.put(pos, true);
                         }
                         return null;
                     }
-                }, tag);
+                });
             }
         }
+    }
+
+    boolean checkExecuted(int pos) {
+        return mExcuteList.get(pos, true);
+    }
+
+    void pause() {
+        mPause = true;
+    }
+
+    void resume() {
+        mPause = false;
+    }
+
+    void stop() {
+        mThumbExecutor.stop();
+        mThumbCache.clear();
+        mRetriever.release();
+        recycler();
+        mContext = null;
     }
 
     private void showThumb(@NonNull ImageView thumbIv, @NonNull File file, @NonNull String tag) {
@@ -200,14 +232,6 @@ class ThumbGenerator {
             mThumbBitmap.recycle();
             mThumbBitmap = null;
         }
-    }
-
-    void stop() {
-        mThumbExecutor.stop();
-        mThumbCache.clear();
-        mRetriever.release();
-        recycler();
-        mContext = null;
     }
 
 }

@@ -13,6 +13,7 @@ import android.support.v7.app.AlertDialog;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -29,6 +30,7 @@ import static com.aeiric.thumb.lib.ThumbConstant.PREFIX_THUMB;
 import static com.aeiric.thumb.lib.ThumbFileUtil.getCacheThumbFile;
 import static com.aeiric.thumb.lib.ThumbSpUtil.putThumbSuffix;
 import static com.aeiric.thumb.lib.ThumbSpUtil.putTrackSuffix;
+import static com.aeiric.thumb.lib.ThumbVelocity.S_MAX_VELOCITY;
 import static com.aeiric.thumb.lib.ThumbVideoUtil.getPercent;
 
 
@@ -37,19 +39,17 @@ import static com.aeiric.thumb.lib.ThumbVideoUtil.getPercent;
  * @desc ThumbFragment
  * @from v1.0.0
  */
-@SuppressWarnings({"FieldCanBeLocal", "ConstantConditions", "unused"})
+@SuppressWarnings("unused")
 public class ThumbFragment extends Fragment {
-    private static final String TAG = "ThumbFragment";
     public static final String EXTRA_PATH = "EXTRA_PATH";
     private static final float S_VIEW_HEIGHT_PERCENT = 0.66944444f;
     private static final int S_SMALL_THUMB_SHOW_LENGTH = 250;
-    @Nullable
+    private static final int S_SCROLL_DIRECTION_LEFT = 1;
+    private static final int S_SCROLL_DIRECTION_RIGHT = 2;
     private ImageView mThumbView;
-    @Nullable
     private RecyclerView mRecycler;
-    @Nullable
+    private LinearLayoutManager mLayoutManager;
     private ImageView mSmallThumb;
-    @Nullable
     private FrameLayout mFrame;
     @NonNull
     private MediaMetadataRetriever mRetriever = new MediaMetadataRetriever();
@@ -72,13 +72,15 @@ public class ThumbFragment extends Fragment {
 
     private boolean mSystemError;
     private int mCurrentRecyclerX;
+    private int mOldRecyclerX;
+    private int mDirection;
     private int mCurrentItemPos = 1;
     private long mVideoDuration;
     private int mThumbWidth;
     private int mThumbHeight;
     private int mSecPerThumb;
     private float mPercent;
-
+    private float mThumbCount;
 
     public static ThumbFragment create(String videoPath) {
         ThumbFragment fragment = new ThumbFragment();
@@ -96,6 +98,7 @@ public class ThumbFragment extends Fragment {
         initDir();
         initPercent();
         initVideoDuration();
+        initCount();
         initSecPerThumb();
         initGenerator();
 
@@ -112,12 +115,15 @@ public class ThumbFragment extends Fragment {
 
     private void initRetriever() {
         mRetriever = new MediaMetadataRetriever();
+        if (getContext() == null || mPath == null) {
+            return;
+        }
         if (!TextUtils.isEmpty(mPath)) {
             try {
                 mRetriever.setDataSource(mPath);
             } catch (Exception e) {
                 setSystemError();
-                ThumbSpUtil.putError(getActivity(), mPath);
+                ThumbSpUtil.putError(getContext(), mPath);
             }
         } else {
             setSystemError();
@@ -179,6 +185,10 @@ public class ThumbFragment extends Fragment {
         mVideoDuration = ThumbVideoUtil.getVideoDuration(mRetriever);
     }
 
+    private void initCount() {
+        mThumbCount = ThumbCalculate.getThumbCount(mVideoDuration);
+    }
+
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -192,8 +202,9 @@ public class ThumbFragment extends Fragment {
         mFrame = view.findViewById(R.id.fv_thumb);
         mThumbView = view.findViewById(R.id.thumb);
         mSmallThumb = view.findViewById(R.id.small_cover);
-        mRecycler.setLayoutManager(new LinearLayoutManager(
-                getContext(), LinearLayoutManager.HORIZONTAL, false));
+        mLayoutManager = new LinearLayoutManager(
+                getContext(), LinearLayoutManager.HORIZONTAL, false);
+        mRecycler.setLayoutManager(mLayoutManager);
     }
 
     @Override
@@ -207,18 +218,20 @@ public class ThumbFragment extends Fragment {
     }
 
     public void showSysError() {
-        new AlertDialog.Builder(getContext())
-                .setTitle("该视频暂不支持视频截取封面")
-                .setMessage("可从右下角'相册选择'选择封面")
-                .setCancelable(false)
-                .setPositiveButton("知道了", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        dialog.dismiss();
-                    }
-                })
-                .create()
-                .show();
+        if (getContext() != null) {
+            new AlertDialog.Builder(getContext())
+                    .setTitle("该视频暂不支持视频截取封面")
+                    .setMessage("可从右下角'相册选择'选择封面")
+                    .setCancelable(false)
+                    .setPositiveButton("知道了", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            dialog.dismiss();
+                        }
+                    })
+                    .create()
+                    .show();
+        }
     }
 
     //设置封面图宽高
@@ -244,14 +257,14 @@ public class ThumbFragment extends Fragment {
     }
 
     private void sizeThumb() {
-        if (mRetriever == null) {
+        if (getContext() == null || mPath == null) {
             return;
         }
         int video_width = ThumbVideoUtil.getVideoWidth(mRetriever);
         int video_height = ThumbVideoUtil.getVideoHeight(mRetriever);
         if (video_width == 0 || video_height == 0) {
             setSystemError();
-            ThumbSpUtil.putError(getActivity(), mPath);
+            ThumbSpUtil.putError(getContext(), mPath);
             showSysError();
             return;
         }
@@ -281,6 +294,8 @@ public class ThumbFragment extends Fragment {
         mThumbHeight = view_height;
     }
 
+    ThumbVelocity mVelocity = new ThumbVelocity();
+
     private void thumbUI() {
         if (getContext() == null) {
             return;
@@ -296,6 +311,7 @@ public class ThumbFragment extends Fragment {
                 .list(mVideoDuration)
                 .context(getContext())
                 .build();
+        mRecycler.setHasFixedSize(true);
         mRecycler.setAdapter(mThumbAdapter);
         mRecycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
@@ -308,6 +324,9 @@ public class ThumbFragment extends Fragment {
                         if (ThumbSpUtil.getError(getContext(), mPath)) {
                             break;
                         }
+                        mVelocity.stop();
+                        updateDirection();
+                        refreshShowViews();
                         getBigThumb();
                         ThumbSpUtil.putSeekX(getContext(), mPath, mCurrentRecyclerX);
                         break;
@@ -317,24 +336,31 @@ public class ThumbFragment extends Fragment {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
                 super.onScrolled(recyclerView, dx, dy);
+                mVelocity.start(Math.abs(dx));
+                Log.e("onScrolled", "---mVelocity--=--" + mVelocity.getVelocity());
                 updateRecyclerX(dx);
                 updatePos();
                 getSmallThumb();
                 getQuickBigThumb();
+                velocityControl();
+
             }
         });
+
         mRecycler.post(new Runnable() {
             @Override
             public void run() {
-                if (ThumbSpUtil.getSeekX(ThumbFragment.this.getContext(), mPath) != 0) {
-                    mRecycler.scrollBy(ThumbSpUtil.getSeekX(ThumbFragment.this.getContext(), mPath), 0);
+                if (getContext() == null) {
+                    return;
+                }
+                if (ThumbSpUtil.getSeekX(getContext(), mPath) != 0) {
+                    mRecycler.scrollBy(ThumbSpUtil.getSeekX(getContext(), mPath), 0);
                 } else {
                     getBigThumb();
                 }
             }
         });
     }
-
 
     private void getSmallThumb() {
         if (getContext() == null) {
@@ -375,10 +401,12 @@ public class ThumbFragment extends Fragment {
         if (TextUtils.isEmpty(mPath)) {
             return;
         }
+        if (mThumbDirSuffix == null) {
+            return;
+        }
         if (mTrackDirSuffix == null) {
             return;
         }
-
         File bigFile = getCacheThumbFile(getContext(), mThumbDirSuffix, (mCurrentItemPos - 1) * mSecPerThumb);
         if (bigFile == null) {
             File smallFile = ThumbFileUtil.getCacheTrackFile(getContext(), mTrackDirSuffix, (mCurrentItemPos - 1) * mSecPerThumb);
@@ -411,6 +439,21 @@ public class ThumbFragment extends Fragment {
         }
     }
 
+    private void velocityControl() {
+        if (mThumbAdapter == null) {
+            return;
+        }
+        if (mVelocity.getVelocity() > S_MAX_VELOCITY) {
+            if (mThumbCount - mCurrentItemPos <= 4) {
+                mThumbAdapter.resume();
+            } else {
+                mThumbAdapter.pause();
+            }
+        } else {
+            mThumbAdapter.resume();
+        }
+    }
+
     private void thumbBitmapRecycler() {
         if (mThumbBitmap != null) {
             mThumbBitmap.recycle();
@@ -421,6 +464,27 @@ public class ThumbFragment extends Fragment {
     private void getBigThumb() {
         if (mThumbGenerator != null) {
             mThumbGenerator.genThumb(mThumbView, mCurrentItemPos - 1);
+        }
+    }
+
+    private void refreshShowViews() {
+        if (mThumbGenerator == null || mThumbAdapter == null) {
+            return;
+        }
+        int first = mLayoutManager.findFirstVisibleItemPosition();
+        int last = mLayoutManager.findLastVisibleItemPosition();
+        if (mDirection == S_SCROLL_DIRECTION_RIGHT) {
+            for (int i = first; i <= last; i++) {
+                if (mThumbAdapter.checkNoBind(i)) {
+                    mThumbAdapter.notifyItemChanged(i);
+                }
+            }
+        } else {
+            for (int i = last; i >= first; i--) {
+                if (mThumbAdapter.checkNoBind(i)) {
+                    mThumbAdapter.notifyItemChanged(i);
+                }
+            }
         }
     }
 
@@ -436,6 +500,15 @@ public class ThumbFragment extends Fragment {
         mCurrentRecyclerX += dx;
     }
 
+    private void updateDirection() {
+        if (mCurrentRecyclerX > mOldRecyclerX) {
+            mDirection = S_SCROLL_DIRECTION_RIGHT;
+        } else {
+            mDirection = S_SCROLL_DIRECTION_LEFT;
+        }
+        mOldRecyclerX = mCurrentRecyclerX;
+    }
+
     private void updatePos() {
         if (mCurrentRecyclerX < 0) {
             return;
@@ -448,6 +521,9 @@ public class ThumbFragment extends Fragment {
     }
 
     public void createThumbFile(@NonNull OnThumbLoadedListener listener) {
+        if (getContext() == null) {
+            return;
+        }
         if (mThumbGenerator == null) {
             return;
         }
@@ -493,7 +569,9 @@ public class ThumbFragment extends Fragment {
     }
 
     private void generatorDestroy() {
-        mThumbGenerator.stop();
+        if (mThumbGenerator != null) {
+            mThumbGenerator.stop();
+        }
     }
 
     private void thumbLoadTaskCancel() {

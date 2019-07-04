@@ -84,6 +84,28 @@ public class ThumbAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
 
     }
 
+    void pause() {
+        if (mGenerator != null) {
+            mGenerator.pause();
+        }
+    }
+
+    void resume() {
+        if (mGenerator != null) {
+            mGenerator.resume();
+        }
+    }
+
+    boolean checkNoBind(int pos) {
+        if (mGenerator == null) {
+            return false;
+        }
+        if (pos <= 0 || pos >= mList.size() - 1) {
+            return false;
+        }
+        return !mGenerator.checkExecuted(pos - 1);
+    }
+
     @Override
     public int getItemViewType(int position) {
         if (position == 0 || position == mList.size() - 1) {
